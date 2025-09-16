@@ -16,7 +16,7 @@
 
 👉 常见面试题：
  **Q:** 为什么需要 Chain？
- **A:** 因为 LLM 本身是黑盒，通过 Chain 可以组合不同模块（LLM、工具、记忆），实现复杂流程的封装和复用。
+ **A:** 因为 LLM 本身是黑盒，`通过 Chain 可以组合不同模块（LLM、工具、记忆），实现复杂流程的封装和复用。
 
 ------
 
@@ -244,8 +244,8 @@ LangChain 提供了不同种类的智能体，常见有：
 - “LangChain 的 Agent 就是让大模型不只是回答问题，还能调用工具、存储记忆、动态规划任务。”
 - “常见 Agent 类型有 ZeroShot、Conversational、ReAct、Plan & Execute，其中 ReAct 是最经典的模式。”
 - “Agent 的工作流是 ReAct：Reason → Act → Observe → Final Answer。”
-- “Memory 解决上下文连贯性，RAG 解决知识覆盖问题，两者可以结合使用。”
-- “在实际开发中，我会用 LangChain 的 AgentExecutor + Tools + Memory，来构建一个企业级智能体系统。”
+- “**Memory 解决上下文连贯性，RAG 解决知识覆盖问题**，两者可以结合使用。”
+- “在实际开发中，我会用 **LangChain 的 AgentExecutor + Tools + Memory，来构建一个企业级智能体系统。**”
 
 
 
