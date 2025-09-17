@@ -427,3 +427,172 @@ result = graph.invoke("规划一次上海3日游并估算预算")
 4. Tools 是 Agent 的手臂，Memory 保证对话连贯，RAG 解决知识不足  
 5. 企业级应用：多 Agent 协作（LangGraph）、安全性与权限控制  
 
+
+
+# Langchain如何估算调用token数目
+
+下面给你一套**在 LangChain 里做 token 计数**的实用方法与可直接运行的小段代码（含中文注释）。分三类场景：
+
+- ① **真实调用后的“准确定义”**：基于 LangChain 的回调把 **prompt/ completion/ total** token 从接口返回里统计出来（最可靠）。
+- ② **调用前的“预估计数”**：用 `tiktoken`（OpenAI 系）或 `transformers`（HF 系）按**目标模型的分词器**精确或近似计算。
+- ③ **链路/文档切块**：按 token 长度做切块或限制（`RecursiveCharacterTextSplitter.from_tiktoken_encoder` 等）。
+
+------
+
+## ① 真实调用后的统计（最可靠）
+
+### OpenAI / vLLM（OpenAI 兼容）——`get_openai_callback`
+
+```python
+# pip install langchain-openai openai langchain
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain.callbacks import get_openai_callback  # 聚合 token 与费用（如有）
+
+# 若用 vLLM 的 OpenAI 兼容服务，配置 base_url 与 api_key
+# export OPENAI_API_BASE=http://127.0.0.1:8000/v1
+# export OPENAI_API_KEY=EMPTY
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+messages = [
+    SystemMessage(content="你是简洁、专业的中文助手。"),
+    HumanMessage(content="用一句话解释什么是自注意力机制。"),
+]
+
+with get_openai_callback() as cb:
+    resp = llm.invoke(messages)
+
+print("回答：", resp.content)
+print("prompt_tokens:", cb.prompt_tokens)
+print("completion_tokens:", cb.completion_tokens)
+print("total_tokens:", cb.total_tokens)
+# 若是 OpenAI 正式接口，还会有 cb.total_cost（USD）
+```
+
+> 提示：**vLLM** 的 OpenAI 兼容端点通常也会返回 `usage` 字段，上面这段同样能聚合出吞吐统计或成本估算（成本为 0）。
+
+### Anthropic（可选）
+
+```python
+# pip install langchain-anthropic anthropic langchain
+from langchain_anthropic import ChatAnthropic
+from langchain_community.callbacks.manager import get_anthropic_callback
+
+llm = ChatAnthropic(model="claude-3-haiku-20240307")
+with get_anthropic_callback() as cb:
+    _ = llm.invoke("一句话解释注意力为什么要除以sqrt(d_k)。")
+print(cb.prompt_tokens, cb.completion_tokens, cb.total_tokens)
+```
+
+------
+
+## ② 调用前的“预估”计数（控制 max_tokens / 切块 / 超限保护）
+
+### A. OpenAI 系：`tiktoken`
+
+```python
+# pip install tiktoken langchain-core
+import tiktoken
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+
+def num_tokens_openai_messages(messages, model="gpt-4o-mini"):
+    """
+    用 tiktoken 对消息内容做“近似计数”（对多数 3.5/4/4o 模型已很准）。
+    注意：不同模型的 chat 模板可能略有差异，以官方/接口 usage 为准。
+    """
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+
+    total = 0
+    for m in messages:
+        # 这里简化为仅对 content 计数；如果你要“更贴近官方规则”，
+        # 可在这里把 role、分隔符等也拼进去再编码。
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        total += len(enc.encode(content))
+    return total
+
+msgs = [
+    SystemMessage(content="你是专业助手。"),
+    HumanMessage(content="简述自注意力的计算步骤。"),
+]
+print("估算 tokens:", num_tokens_openai_messages(msgs, "gpt-4o-mini"))
+```
+
+> 更严谨做法：把消息按 OpenAI 的 **chat 模板**（例如 `<|im_start|>role\ncontent<|im_end|>\n`）拼成单串再编码；但不同模型模板可能改变，**最终还是以 API 返回的 `usage` 为准**。
+
+### B. HuggingFace 模型：`transformers.AutoTokenizer`
+
+```python
+# pip install transformers
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen2-1.5B-Instruct")
+text = "解释一下自注意力的核心公式。"
+print("HF tokens:", len(tok.encode(text)))
+
+# 如果是“聊天模型”，用官方 chat 模板更准确：
+messages = [
+    {"role": "system", "content": "你是专业助手。"},
+    {"role": "user", "content": "简述自注意力的计算步骤。"},
+]
+chat_str = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+print("按 chat 模板后的 tokens:", len(tok.encode(chat_str)))
+```
+
+### C. 结合“安全余量”估算 `max_new_tokens`
+
+```python
+def safe_max_new_tokens(messages, max_ctx, model="gpt-4o-mini", safety=64):
+    used = num_tokens_openai_messages(messages, model)
+    return max(1, max_ctx - used - safety)
+
+max_new = safe_max_new_tokens(msgs, max_ctx=8192, model="gpt-4o-mini")
+print("建议 max_new_tokens:", max_new)
+```
+
+------
+
+## ③ 文档切块/链路限长：按 token 切
+
+LangChain 自带的按 token 切块器（**强烈推荐**，可避免中文/emoji 计数误差）：
+
+```python
+# pip install langchain-text-splitters tiktoken
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    model_name="gpt-4o-mini",   # 决定 tiktoken 编码
+    chunk_size=800,             # 每块最大 token
+    chunk_overlap=80,
+)
+docs = splitter.split_text("""
+Transformer 用自注意力代替 RNN/CNN...
+（此处可放很长的文本）
+""")
+print("块数:", len(docs))
+print("首块内容（前200字）:", docs[0][:200])
+```
+
+> 对 **HuggingFace**/私有模型，也可以用 `TokenTextSplitter.from_huggingface_tokenizer(tokenizer=AutoTokenizer.from_pretrained(...))`。
+
+------
+
+## 常见坑 & 经验
+
+- **以接口 `usage` 为准**：预估只是辅助，**真实统计请用回调**（`get_openai_callback` 等）或直接读取响应里的 `usage` 字段。
+- **Chat 模板差异**：不同供应商/不同版本的**聊天格式**不完全相同；HF 要用 `apply_chat_template`，OpenAI 最终以服务端计为准。
+- **右侧 padding**：做批量推理/评估时，右侧 padding 更利于自回归模型的效率与 token 数判断。
+- **RAG/检索**：切块尽量按 token 限长，重叠 10–30%，避免跨段断裂。
+- **vLLM**：如果通过 OpenAI 兼容端点调用，大多会返回 `usage`；LangChain 的 `get_openai_callback` 同样可以聚合统计。
+
+------
+
+### 一键小结（面试口径）
+
+> **“在 LangChain 里，token 计数有两类：**
+>  1）**事后准确**：用回调（比如 `get_openai_callback`）读接口返回的 `usage`；
+>  2）**事前预估**：用与目标模型一致的分词器（OpenAI→`tiktoken`，HF→`AutoTokenizer`/`apply_chat_template`）来估算。
+>  文档/链路控制则用 `RecursiveCharacterTextSplitter.from_tiktoken_encoder` 或对应 HF 的 token 切块器。”**
+
