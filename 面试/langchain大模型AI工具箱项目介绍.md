@@ -1,9 +1,3 @@
-我把你给的项目说明**完善成一个可演示、可讲解的完整工程蓝图**，并把关键代码都写出来：**后端（Django）+ LangChain Agent + FAISS 向量存储 + 文档/网页抓取与向量化 + Docker**。你可以在面试中边讲边展示代码结构、运行流程和 demo（上传文档 → 构建向量库 → 用 Agent 问问题并调用工具）。
-
-下面是完整内容：项目结构、关键文件、实现细节、运行/演示步骤，以及面试讲解要点。代码里我用占位的 API KEY / 路径，面试时说明你会替换为真实密钥即可。
-
-------
-
 # 项目概览（补充完善后的描述 — 面试用一句话）
 
 **大模型 AI 工具箱平台**：基于 Python + LangChain + FAISS + Django + Docker，集成多家第三方 API 与爬虫（Crawl4AI 或自建爬虫），把企业文档与网页数据向量化存储到 FAISS，提供 RAG 问答与 Agent 自动化工具调用的 RESTful 服务，并通过 Django Admin 管理数据。
@@ -381,7 +375,7 @@ CMD ["gunicorn", "ai_toolbox.wsgi:application", "--bind", "0.0.0.0:8000", "--wor
 
 #  技术实现
 
-## langchain 如何使用 agent 去实现文档  法规相关内容的判定，如果有问题，是不是得需要生成相关的报告？
+## langchain 如何使用 agent 去实现文档  法规相关内容的判定，如果有问题，是不是得需要生成相关的报告
 
 
 
@@ -1156,13 +1150,7 @@ class RAGMonitor:
 
 ## 二、常见的权限模型
 
-### 1. **ACL（Access Control List，访问控制列表）**
-
-- 每个资源有一个列表，记录哪些用户/角色可以访问。
-- 适用于资源粒度较小的场景。
-- 缺点：管理复杂度随资源数增加而指数增长。
-
-### 2. **RBAC（Role-Based Access Control，基于角色的访问控制）** ⭐常用
+### RBAC（Role-Based Access Control，基于角色的访问控制）** ⭐常用
 
 - 用户 → 角色 → 权限。
 - 示例：
@@ -1170,19 +1158,6 @@ class RAGMonitor:
   - 用户李四 → 角色「普通用户」 → 拥有「查看文档」权限。
 - 优点：清晰、易维护。
 - 缺点：当权限场景复杂（需要动态条件）时不够灵活。
-
-### 3. **ABAC（Attribute-Based Access Control，基于属性的访问控制）**
-
-- 根据用户属性、资源属性、环境属性来动态决定权限。
-- 示例：
-  - 用户部门 = 财务部 且 访问时间 = 工作日 9-18点 → 允许访问报销系统。
-- 优点：灵活，可实现复杂策略。
-- 缺点：设计与运维成本高。
-
-### 4. **PBAC（Policy-Based Access Control，基于策略的访问控制）**
-
-- 使用统一的策略引擎（如 **Casbin、OPA**），通过配置规则来决定是否允许访问。
-- 更适合大型项目，规则可集中化管理。
 
 ------
 
@@ -1242,17 +1217,6 @@ class RAGMonitor:
   - 财务部用户只能看到本部门的报销单。
   - 管理员能看到全公司数据。
 
-### 3. **日志与审计**
-
-- 记录用户的访问行为（谁在什么时间访问了什么资源，是否成功）。
-- 满足安全审计要求。
-
-### 4. **工具/框架选型**
-
-- Java/Spring 项目：Spring Security + JWT + RBAC。
-- Go 项目：Casbin（强大、灵活的权限库）。
-- 前端：在 Vue/React 里用路由守卫和组件级权限控制。
-
 ------
 
 ## 五、实际案例示意
@@ -1270,389 +1234,759 @@ class RAGMonitor:
 
 
 
-## 详细介绍一种最常见的权限管理方式，使用django进行实现，脉络清晰，内容完整。
+
+
+# 工具调用
 
 
 
-下面用 **RBAC（基于角色的访问控制）** 作为“最常见的一种权限管理方式”，并把它在 **Django** 中的落地实现讲清楚 —— 从建模、赋权、在视图/模板/API 的校验、对象级权限、缓存失效、审计与测试，到常见陷阱和最佳实践。脉络清晰、可直接复制粘贴到项目中使用。
+## 百度搜索
 
-------
+好的！下面给你一个**可直接落地**的「百度搜索」LangChain Tool 封装方案，默认走 **SerpAPI 的 Baidu 引擎**（稳定、省心、合法合规），并附带：
 
-# 1 总体思路（简要）
+- LangChain `BaseTool` 实现（同步/异步）
+- 结果统一结构化（title / link / snippet / position / source）
+- 超时、重试、限速与最少依赖
+- 在你的 Agent 中的接入示例
+- Django REST API 封装示例（便于前端调用）
 
-- **模型级权限**（Django 内置）：操作某类对象（add/change/delete/view）。
-- **角色 = Group**：把 Permission 赋给 Group（角色），把用户加入 Group。
-- **权限检查点**：
-  - 前端（隐藏按钮/菜单，UX）—— **辅助**，不能依赖
-  - 后端（视图/中间件/依赖）—— **强制**（必做）
-  - 数据层（filter/owner 检查 或 DB 行级安全）—— 防止遗漏
-- **对象级权限**（可选）：若每条数据需要不同授权（owner、协作者），用 `owner` 检查或 `django-guardian`。
-
-------
-
-# 2 准备：requirements / settings（简短）
-
-```text
-# requirements.txt 示例
-Django>=4.0
-djangorestframework           # 如果做 API
-django-guardian               # 若需对象级权限
-djangorestframework-simplejwt # 若使用 JWT（可选）
-```
-
-settings.py 关键项（若使用 django-guardian）：
-
-```py
-INSTALLED_APPS += [
-    'rest_framework',    # 如果用 DRF
-    'guardian',
-    'yourapp',
-]
-
-AUTHENTICATION_BACKENDS = (
-    'django.contrib.auth.backends.ModelBackend',
-    'guardian.backends.ObjectPermissionBackend',  # 用于对象级权限
-)
-
-ANONYMOUS_USER_ID = -1  # guardian 要求
-```
+> 说明：官方百度搜索没有对外通用开放 API；生产上建议通过 **SerpAPI**（支持 `engine=baidu`）。如果你不想用第三方服务，可再做一个 HTML 解析 fallback，但要注意服务条款与 robots.txt。我先给出**SerpAPI 方案**（推荐）。
 
 ------
 
-# 3 模型设计（以文章 Article 为例）
-
-`yourapp/models.py`：
-
-```py
-from django.db import models
-from django.conf import settings
-
-class Article(models.Model):
-    title = models.CharField(max_length=200)
-    content = models.TextField()
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, related_name='articles', on_delete=models.CASCADE)
-    is_published = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        # 自定义权限（除了 Django 自动的 add/change/delete/view）
-        permissions = [
-            ("can_publish", "Can publish article"),
-        ]
-
-    def __str__(self):
-        return self.title
-```
-
-- `Meta.permissions` 会在 migrate 时写入 `auth_permission` 表。
-- 推荐把 `resource:action` 的语义记清楚，例如 `blog.can_publish`。
-
-------
-
-# 4 创建角色（Group）并分配权限（可在 admin 做，也可程序化）
-
-**管理命令：`manage.py create_roles`（示例）**
-
-```py
-# yourapp/management/commands/create_roles.py
-from django.core.management.base import BaseCommand
-from django.contrib.auth.models import Group, Permission
-from django.apps import apps
-
-class Command(BaseCommand):
-    help = "Create default groups and assign permissions"
-
-    def handle(self, *args, **options):
-        Article = apps.get_model('yourapp', 'Article')
-        perms = {
-            'Admin': ['add_article','change_article','delete_article','view_article','can_publish'],
-            'Editor': ['add_article','change_article','view_article','can_publish'],
-            'Reader': ['view_article'],
-        }
-        for role_name, codenames in perms.items():
-            group, _ = Group.objects.get_or_create(name=role_name)
-            group.permissions.clear()
-            for codename in codenames:
-                try:
-                    if codename == 'can_publish':
-                        perm = Permission.objects.get(codename='can_publish', content_type__app_label='yourapp')
-                    else:
-                        perm = Permission.objects.get(codename=codename, content_type__model='article')
-                    group.permissions.add(perm)
-                except Permission.DoesNotExist:
-                    self.stdout.write(self.style.WARNING(f'Permission {codename} not found'))
-        self.stdout.write(self.style.SUCCESS('Roles created/updated'))
-```
-
-运行：
+# 1) 安装与环境变量
 
 ```bash
-python manage.py migrate
-python manage.py create_roles
+pip install httpx pydantic langchain
+# 若你还没有 LangChain 的工具基类，确保版本 >= 0.1.x
 ```
 
-或直接在 Django Admin 的 **Groups** 页面分配权限。
+在运行环境中设置（Docker 推荐用 `ENV` 或 secrets）：
+
+```bash
+export SERPAPI_API_KEY=xxxxxx
+```
 
 ------
 
-# 5 在视图层做校验（Django 视图 / CBV / 模板）
+# 2) LangChain Tool：BaiduSearchTool（SerpAPI）
 
-## 5.1 基于装饰器（函数视图）
+```python
+# tools/baidu_search_tool.py
+from __future__ import annotations
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
+import httpx
+from pydantic import BaseModel, Field, validator
+from langchain.tools import BaseTool
 
-```py
-from django.contrib.auth.decorators import permission_required
+SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
 
-@permission_required('yourapp.can_publish', raise_exception=True)
-def publish_article(request, pk):
-    # 权限通过后执行
-    ...
+class BaiduSearchInput(BaseModel):
+    """Parameters for Baidu search."""
+    query: str = Field(..., description="搜索关键词")
+    num_results: int = Field(5, ge=1, le=20, description="返回的结果条数（1-20）")
+    # 常用可选参数
+    lr: Optional[str] = Field(None, description="语言/地区限定，如 'lang_zh-CN'")
+    safe: Optional[bool] = Field(False, description="是否启用安全搜索（SerpAPI段支持）")
+    page: Optional[int] = Field(1, ge=1, description="分页（从1开始）")
+    # 时间范围在 Baidu/SerpAPI 里并非完全等价，这里提供一个语义化占位
+    timeframe: Optional[str] = Field(None, description="时间范围: 'day'|'week'|'month'（可选）")
+
+    @validator("query")
+    def validate_query(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("query 不能为空")
+        return v.strip()
+
+class BaiduSearchTool(BaseTool):
+    """Baidu search via SerpAPI."""
+    name: str = "baidu_search"
+    description: str = (
+        "使用 Baidu（通过 SerpAPI）进行网页搜索，返回结构化结果。"
+        "输入: {query, num_results, lr, safe, page, timeframe}；"
+        "输出: 标题、链接、摘要、位置等。"
+    )
+    args_schema: type = BaiduSearchInput
+
+    # 可选：简单限速（每次调用间隔最少 seconds_between_calls 秒）
+    seconds_between_calls: float = 0.4
+    _last_call_ts: float = 0.0
+
+    # 超时与重试
+    timeout_s: float = 10.0
+    max_retries: int = 2
+
+    # 你可以在实例化时传入 api_key；若不传则读环境变量
+    serpapi_key: Optional[str] = None
+
+    def _throttle(self) -> None:
+        now = time.time()
+        delta = now - self._last_call_ts
+        if delta < self.seconds_between_calls:
+            time.sleep(self.seconds_between_calls - delta)
+        self._last_call_ts = time.time()
+
+    def _build_params(self, inp: BaiduSearchInput) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "engine": "baidu",
+            "q": inp.query,
+            "api_key": self.serpapi_key or os.getenv("SERPAPI_API_KEY", ""),
+            "no_cache": "true",          # 避免陈旧缓存
+            "num": inp.num_results,
+            "pn": (inp.page - 1) * inp.num_results if inp.page and inp.page > 1 else 0,
+        }
+        if inp.lr:
+            params["lr"] = inp.lr
+        if inp.safe:
+            params["safe"] = "active"
+        # timeframe：SerpAPI 对 baidu 不一定原生支持，这里作为将来扩展的占位
+        if inp.timeframe in {"day", "week", "month"}:
+            params["time_period"] = inp.timeframe  # 若未来支持则可直通；否则可忽略
+        return params
+
+    def _call_serpapi(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if not params.get("api_key"):
+            raise RuntimeError("缺少 SERPAPI_API_KEY，请配置环境变量或在工具实例化时传入 serpapi_key")
+        last_err: Optional[Exception] = None
+        for _ in range(self.max_retries + 1):
+            try:
+                with httpx.Client(timeout=self.timeout_s) as client:
+                    resp = client.get(SERPAPI_ENDPOINT, params=params)
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as e:
+                last_err = e
+                time.sleep(0.5)  # 简单退避
+        raise RuntimeError(f"SerpAPI 请求失败: {last_err}")
+
+    @staticmethod
+    def _normalize_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        将 SerpAPI 的返回统一为:
+        {title, link, snippet, position, source}
+        """
+        items: List[Dict[str, Any]] = []
+        # SerpAPI baidu 返回字段可能是 'organic_results'
+        for i, r in enumerate(payload.get("organic_results", []), start=1):
+            items.append({
+                "title": r.get("title"),
+                "link": r.get("link"),
+                "snippet": r.get("snippet") or r.get("displayed_link"),
+                "position": r.get("position") or i,
+                "source": "baidu",
+            })
+        return items
+
+    def _run(self, query: str, num_results: int = 5, lr: Optional[str] = None,
+             safe: Optional[bool] = False, page: Optional[int] = 1,
+             timeframe: Optional[str] = None) -> List[Dict[str, Any]]:
+        """同步调用（供 Agent 默认使用）"""
+        self._throttle()
+        inp = BaiduSearchInput(
+            query=query, num_results=num_results, lr=lr, safe=safe, page=page, timeframe=timeframe
+        )
+        params = self._build_params(inp)
+        raw = self._call_serpapi(params)
+        return self._normalize_results(raw)
+
+    async def _arun(self, query: str, num_results: int = 5, lr: Optional[str] = None,
+                    safe: Optional[bool] = False, page: Optional[int] = 1,
+                    timeframe: Optional[str] = None) -> List[Dict[str, Any]]:
+        """异步调用（若你的 Agent 走异步链路可以用这个）"""
+        # 简单用同步包装，也可以用 httpx.AsyncClient 改写为真正异步
+        return self._run(query, num_results, lr, safe, page, timeframe)
 ```
-
-## 5.2 类视图（CBV）使用 `PermissionRequiredMixin`
-
-```py
-from django.contrib.auth.mixins import PermissionRequiredMixin
-from django.views.generic import View
-
-class PublishArticleView(PermissionRequiredMixin, View):
-    permission_required = 'yourapp.can_publish'
-    raise_exception = True
-
-    def post(self, request, *args, **kwargs):
-        ...
-```
-
-## 5.3 模板层渲染控制
-
-```django
-{% if perms.yourapp.can_publish %}
-  <a href="{% url 'publish' article.id %}">Publish</a>
-{% endif %}
-```
-
-> 注意：模板控制只是 UX 层面，必须配合后端校验。
 
 ------
 
-# 6 对象级权限（两种常见方案）
+# 3) 在 Agent/Chain 中接入
 
-## 6.1 简单的 owner（归属者）检查 —— 最直接、无需外部库
+```python
+# agents/init_agent.py
+from langchain.chat_models import ChatOpenAI
+from langchain.agents import initialize_agent, AgentType
+from tools.baidu_search_tool import BaiduSearchTool
 
-- 在查询和 get_object 前进行过滤或比较 `obj.owner == request.user`。
+def build_agent():
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    baidu_tool = BaiduSearchTool()  # 或 BaiduSearchTool(serpapi_key="...")
 
-示例（ViewSet / CBV）：
+    tools = [baidu_tool]
+    agent = initialize_agent(
+        tools=tools,
+        llm=llm,
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True
+    )
+    return agent
 
-```py
-def get_queryset(self):
-    qs = super().get_queryset()
-    if self.request.user.is_superuser:
-        return qs
-    return qs.filter(owner=self.request.user)  # 只看自己的
+if __name__ == "__main__":
+    agent = build_agent()
+    print(agent.run("使用 baidu_search 搜索：清华大学 计算机系 最新 新闻"))
 ```
 
-或检查单个对象：
-
-```py
-obj = get_object_or_404(Article, pk=pk)
-if obj.owner != request.user and not request.user.has_perm('yourapp.change_article'):
-    raise PermissionDenied
-```
-
-## 6.2 使用 `django-guardian` 实现细粒度对象级权限
-
-安装并配置（见上面 settings）后：
-
-赋权：
-
-```py
-from guardian.shortcuts import assign_perm
-assign_perm('change_article', some_user, article)
-```
-
-检查（任意地方）：
-
-```py
-request.user.has_perm('yourapp.change_article', article)  # True/False
-```
-
-DRF 中直接在 `has_object_permission` 使用 `user.has_perm(..., obj)` 即可。
+在指令式工具选择里，你可以写提示让 Agent 明确该用 `baidu_search` 工具（比如“若需要检索网页，请调用 baidu_search 工具”）。
 
 ------
 
-# 7 Django REST Framework (DRF) 示例：自定义权限类
+# 4) Django REST API 封装（可选）
 
-`permissions.py`：
+```python
+# api/views.py
+import json
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from tools.baidu_search_tool import BaiduSearchTool
 
-```py
-from rest_framework.permissions import BasePermission, SAFE_METHODS
+baidu_tool = BaiduSearchTool()
 
-class IsOwnerOrHasModelPermission(BasePermission):
+@api_view(["GET"])
+def baidu_search_view(request):
+    query = request.GET.get("q", "").strip()
+    if not query:
+        return Response({"error": "q 参数必填"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        num = int(request.GET.get("num", 5))
+        page = int(request.GET.get("page", 1))
+    except ValueError:
+        return Response({"error": "num/page 必须为整数"}, status=status.HTTP_400_BAD_REQUEST)
+
+    lr = request.GET.get("lr")
+    safe = request.GET.get("safe", "false").lower() in {"1", "true", "yes"}
+    timeframe = request.GET.get("timeframe")
+
+    try:
+        results = baidu_tool._run(
+            query=query, num_results=num, lr=lr, safe=safe, page=page, timeframe=timeframe
+        )
+        return Response({"query": query, "results": results})
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+```
+
+**路由：**
+
+```python
+# api/urls.py
+from django.urls import path
+from .views import baidu_search_view
+
+urlpatterns = [
+    path("tools/baidu_search", baidu_search_view),
+]
+```
+
+**调用示例：**
+
+```
+GET /api/tools/baidu_search?q=生成式AI&num=5&page=1
+```
+
+------
+
+# 5) 返回结果结构（前端友好）
+
+统一返回：
+
+```json
+{
+  "query": "生成式AI",
+  "results": [
+    {
+      "title": "……",
+      "link": "https://www.baidu.com/……",
+      "snippet": "……",
+      "position": 1,
+      "source": "baidu"
+    }
+  ]
+}
+```
+
+------
+
+# 6) 生产建议 & 可选增强
+
+- **缓存**：用 `(query, page, num)` 做键，短期缓存（如 5–15 分钟）减少费用与延迟。
+- **审计**：记录调用日志（query、时间、IP/用户、返回条数、耗时、错误码）。
+- **并发保护**：在高并发场景可用队列/令牌桶实现更严格的 QPS 控制。
+- **安全**：避免将用户原始 query 直接落库（含个人信息时要脱敏）。
+- **多引擎冗余**：可加 `engine="google"`/“bing” 平滑切换（依然通过 SerpAPI），或对比聚合。
+- **结果富化**：解析站点 favicon、主域名，或调用你的 Crawl4AI 对命中的链接做**二跳抓取**+RAG 摘要。
+
+
+
+## 帮我封装几个tool，一个是查取相应的企业文档和法规，根据上传的后续文件，匹配法规发现是否合格，如果不合格，生成不合格的报告，其中说明原因。
+
+下面给你一套可直接接入 Agent 的“三件套”Tools，用于：
+
+1. 检索企业文档/法规；2) 依据上传文件进行法规匹配与合规判定；3) 若不合格，自动生成**不符合项报告**（含原因与溯源）。
+    代码用 **Python + LangChain + Faiss**，输出用 **Pydantic** 约束为固定 JSON，便于前端/后端消费。你可以把这三件套挂到同一个 Agent，也可按 REST API 调用。
+
+------
+
+# 设计概览
+
+- **RegDocSearchTool**：在“法规与企业文档”向量库中检索相关片段（返回 chunk 证据）。
+- **ComplianceCheckTool**：对“新上传文件”执行抽取→匹配→判定，输出逐条**要求-证据-结论**。
+- **NCReportTool**（Non-Conformance Report）：基于判定结果，生成**不符合项报告**（结构化 JSON + Markdown 摘要），可直接落库或回传给前端下载。
+
+> 实现要点：
+>
+> - 向量库：法规、企业标准、流程制度统一编码入 **Faiss**（建议 bge-m3 / e5-multilingual）。
+> - 结构化抽取：用你前面“知识抽取工具”的抽取能力（日期、金额、责任人、指标等）。
+> - 判定逻辑：**规则 + LLM 裁决**（Hybrid），可写 Rule 函数，也可让 LLM 做释义比对，且必须“只依据证据”。
+> - 溯源：所有结论都挂 evidence（chunk_id、页码、offset、原文摘录）。
+
+------
+
+## 统一数据结构（Pydantic）
+
+```python
+# schemas.py
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal
+
+class Evidence(BaseModel):
+    source_id: str               # 文档ID/法规ID
+    chunk_id: str
+    page: Optional[int] = None
+    start: Optional[int] = None
+    end: Optional[int] = None
+    text_snippet: Optional[str] = None
+
+class Requirement(BaseModel):
+    req_id: str
+    title: str
+    statement: str               # 要求条文（人类可读）
+    category: str                # 安全/质量/环保/信息安全...
+    severity: Literal["low","medium","high","critical"] = "medium"
+
+class MatchResult(BaseModel):
+    requirement: Requirement
+    matched_evidence: List[Evidence] = []
+    decision: Literal["pass","fail","not_applicable","uncertain"]
+    reason: str                  # 判定理由（必须基于证据）
+    confidence: float = Field(ge=0, le=1)
+
+class ComplianceSummary(BaseModel):
+    doc_id: str
+    checked_at: str
+    overall: Literal["pass","fail","partial","uncertain"]
+    stats: dict
+    items: List[MatchResult]
+```
+
+------
+
+## 1) 法规/文档检索工具：`RegDocSearchTool`
+
+- 输入：查询语句（或文档上下文），可指定只搜“法规”或“企业文档”或“全部”。
+- 输出：命中片段的**结构化证据**，供后续匹配使用。
+
+```python
+# tools/regdoc_search_tool.py
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from typing import List, Optional, Literal, Dict, Any
+from schemas import Evidence
+from your_vector_store import faiss_search   # 你已有的Faiss封装
+
+class RegDocSearchInput(BaseModel):
+    query: str = Field(..., description="语义查询")
+    top_k: int = Field(8, ge=1, le=20)
+    scope: Literal["all","regulations","enterprise"] = "all"  # 搜索范围
+    filters: Optional[Dict[str, Any]] = None                  # 例如 { "country":"CN","dept":"QA" }
+
+class RegDocSearchTool(BaseTool):
+    name = "regdoc_search"
+    description = "在法规/企业文档库中进行向量检索，返回证据片段（带溯源信息）。"
+    args_schema = RegDocSearchInput
+
+    def _run(self, query: str, top_k: int = 8, scope: str = "all", filters=None) -> List[Evidence]:
+        hits = faiss_search(query=query, top_k=top_k, scope=scope, filters=filters)
+        results = []
+        for h in hits:
+            results.append(Evidence(
+                source_id=h["doc_id"], chunk_id=h["chunk_id"], page=h.get("page"),
+                start=h.get("start"), end=h.get("end"),
+                text_snippet=h["text"][:600]
+            ))
+        return [e.dict() for e in results]
+
+    async def _arun(self, **kwargs):
+        return self._run(**kwargs)
+```
+
+------
+
+## 2) 合规匹配与判定工具：`ComplianceCheckTool`
+
+- 输入：上传文件 `doc_id`（或原文 text）；可选指定法规主题/类别。
+- 步骤：
+  1. 对上传文件做**结构化抽取**（沿用你已有的抽取管道）。
+  2. 根据抽取出的关键信息 + 主题，调用 `regdoc_search` 搜法规条文（RAG）。
+  3. 构造“**要求 Requirement**”候选集（可来源于：法规条文模板库 / LLM 释义归一）。
+  4. 逐条判定：
+     - **规则判定**（例：必须包含签署日期 / 某字段≥阈值 / 必须有责任人）
+     - **LLM 对齐**：给“条文statement + 证据片段 + 上传文档相关段”做释义比对，强制**结构化输出**（pass/fail/NA/uncertain + reason + confidence）。
+  5. 汇总整体结论与统计。
+
+```python
+# tools/compliance_check_tool.py
+import datetime as dt
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from schemas import Requirement, Evidence, MatchResult, ComplianceSummary
+from tools.regdoc_search_tool import RegDocSearchTool
+from your_extract import extract_from_document        # 你的“知识抽取工具”
+from your_llm import structured_judge                 # 结构化判定LLM封装
+from your_rules import run_rule_checks_for_requirement # 规则函数集合
+
+class ComplianceInput(BaseModel):
+    doc_id: Optional[str] = Field(None, description="上传文件ID")
+    text: Optional[str] = Field(None, description="原始文本（当没有doc_id时使用）")
+    themes: List[str] = Field(default_factory=list, description="法规主题（如 ['信息安全','质量']）")
+    top_k: int = 8
+
+class ComplianceCheckTool(BaseTool):
+    name = "compliance_check"
+    description = ("对上传文件进行法规匹配与合规判定。"
+                   "输出逐条要求的结论、理由与证据，并汇总整体结论。")
+    args_schema = ComplianceInput
+
+    def _build_requirements(self, evidences: List[Evidence], themes: List[str]) -> List[Requirement]:
+        """
+        生成待判定的 Requirement 列表。
+        做法A：从“法规模板库”按主题拉取基础要求，再用LLM/检索补充释义；
+        做法B：对命中的法规片段进行“规范化”抽取为Requirement。
+        这里给个极简示例。
+        """
+        reqs = []
+        for i, ev in enumerate(evidences[:10], start=1):
+            reqs.append(Requirement(
+                req_id=f"REQ_{i}",
+                title="关键条文要求",
+                statement=ev.text_snippet or "要求：文档需包含明确的责任人、日期与合规指标。",
+                category=themes[0] if themes else "general",
+                severity="medium"
+            ))
+        return reqs
+
+    def _judge_one(self, requirement: Requirement, doc_extract: dict, ev_list: List[Evidence]) -> MatchResult:
+        # 1) 规则快速判定（结构化抽取的字段直接验证）
+        rule_res = run_rule_checks_for_requirement(requirement, doc_extract)
+        if rule_res and rule_res["decision"] in {"pass","fail","not_applicable"}:
+            return MatchResult(
+                requirement=requirement,
+                matched_evidence=ev_list[:3],
+                decision=rule_res["decision"], reason=rule_res["reason"],
+                confidence=rule_res.get("confidence", 0.8)
+            )
+        # 2) LLM 释义比对（仅使用提供的证据和上传文档摘要）
+        llm_out = structured_judge(
+            requirement=requirement,
+            evidence_text="\n\n---\n".join([e.text_snippet or "" for e in ev_list]),
+            doc_summary=self._compact_doc_summary(doc_extract)
+        )
+        return MatchResult(
+            requirement=requirement,
+            matched_evidence=ev_list[:3],
+            decision=llm_out.decision,
+            reason=llm_out.reason,
+            confidence=llm_out.confidence
+        )
+
+    @staticmethod
+    def _compact_doc_summary(doc_extract: dict) -> str:
+        # 将抽取结果压缩成简明摘要，作为 LLM 判定输入
+        rp = [p.get("name") for p in doc_extract.get("responsible_parties", [])]
+        am = doc_extract.get("amounts", [])
+        kpis = doc_extract.get("kpis", [])
+        dts = doc_extract.get("dates", [])
+        return (f"RESP:{rp[:3]} | AMOUNTS:{len(am)} | KPIS:{len(kpis)} | DATES:{len(dts)}")
+
+    def _run(self, doc_id: Optional[str] = None, text: Optional[str] = None,
+             themes: List[str] = [], top_k: int = 8) -> dict:
+        assert (doc_id or text), "必须提供 doc_id 或 text"
+        # 1) 结构化抽取（你已有的抽取服务）
+        doc_extract = extract_from_document(text, doc_id) if text else extract_from_document(None, doc_id)
+        # 2) 构造检索查询（可据抽取字段拼接query）
+        query = " ".join(themes) or "合规 要求 责任人 日期 KPI"
+        evidences = []
+        # 用前面定义的工具检索法规/企业文档
+        reg_search = RegDocSearchTool()
+        ev_raw = reg_search._run(query=query, top_k=top_k, scope="all")
+        evidences = [Evidence(**e) for e in ev_raw]
+
+        # 3) 生成 Requirement 候选
+        reqs = self._build_requirements(evidences, themes)
+
+        # 4) 逐条判定
+        items: List[MatchResult] = []
+        for r in reqs:
+            # 为每个要求挑选最相关的若干证据（这里简单用前N条，你可用相似度再筛）
+            ev_for_r = evidences[:4]
+            items.append(self._judge_one(r, doc_extract["fields"], ev_for_r))
+
+        # 5) 汇总
+        pass_cnt = sum(1 for i in items if i.decision == "pass")
+        fail_cnt = sum(1 for i in items if i.decision == "fail")
+        na_cnt   = sum(1 for i in items if i.decision == "not_applicable")
+        un_cnt   = sum(1 for i in items if i.decision == "uncertain")
+        overall = "fail" if fail_cnt > 0 else ("partial" if un_cnt or na_cnt else "pass")
+
+        summary = ComplianceSummary(
+            doc_id=doc_id or "ad_hoc",
+            checked_at=dt.datetime.now().isoformat(),
+            overall=overall,
+            stats={"pass": pass_cnt, "fail": fail_cnt, "na": na_cnt, "uncertain": un_cnt},
+            items=items
+        )
+        return summary.dict()
+
+    async def _arun(self, **kwargs):
+        return self._run(**kwargs)
+```
+
+### 判定用的 LLM 封装（示例）
+
+```python
+# your_llm.py
+from pydantic import BaseModel
+from langchain.prompts import ChatPromptTemplate
+from langchain.output_parsers import StructuredOutputParser
+from langchain.chat_models import ChatOpenAI
+
+class JudgeOut(BaseModel):
+    decision: str    # pass/fail/not_applicable/uncertain
+    reason: str
+    confidence: float
+
+def structured_judge(requirement, evidence_text, doc_summary) -> JudgeOut:
+    schema = StructuredOutputParser.from_names_and_descriptions({
+        "decision": "pass|fail|not_applicable|uncertain",
+        "reason": "基于证据的简要理由（不可臆测）",
+        "confidence": "0~1之间的小数"
+    })
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "你是合规审查助手，只能依据提供的证据进行判断。"),
+        ("system", f"严格按以下JSON输出：\n{schema.get_format_instructions()}"),
+        ("human", 
+         f"要求: {requirement.title}\n"
+         f"条文: {requirement.statement}\n"
+         f"上传文档摘要: {doc_summary}\n"
+         f"证据片段(仅可据此判断):\n{evidence_text}\n"
+         "若证据不足以支持“合格”，请返回 fail 或 uncertain，并说明原因。")
+    ])
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    out = llm.invoke(prompt.format_messages())
+    data = schema.parse(out.content)
+    return JudgeOut(**data)
+```
+
+### 规则校验函数（示例）
+
+```python
+# your_rules.py
+def run_rule_checks_for_requirement(requirement, doc_fields):
     """
-    Allow access if:
-      - request.user is owner of obj OR
-      - user has model permission (change/delete) OR
-      - for safe methods, article.is_published or user has view permission
+    示例：若条文涉及“必须明确责任人/签署日期”，用抽取到的字段直接判定。
     """
-    def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated
-
-    def has_object_permission(self, request, view, obj):
-        # safe read
-        if request.method in SAFE_METHODS:
-            if getattr(obj, 'is_published', False):
-                return True
-            return request.user.has_perm('yourapp.view_article', obj) \
-                   or request.user.has_perm('yourapp.view_article')
-        # owner
-        if hasattr(obj, 'owner') and obj.owner == request.user:
-            return True
-        # change/delete
-        if request.method in ('PUT', 'PATCH'):
-            return request.user.has_perm('yourapp.change_article', obj)
-        if request.method == 'DELETE':
-            return request.user.has_perm('yourapp.delete_article', obj)
-        return False
-```
-
-在 ViewSet 中使用：
-
-```py
-from .permissions import IsOwnerOrHasModelPermission
-
-class ArticleViewSet(viewsets.ModelViewSet):
-    queryset = Article.objects.all()
-    serializer_class = ArticleSerializer
-    permission_classes = [IsAuthenticated, IsOwnerOrHasModelPermission]
-```
-
-> 注意：`user.has_perm(..., obj)` 需要 `guardian` 或相应后端支持，或者你在代码里实现 owner 检查（如上）。
-
-------
-
-# 8 权限缓存与失效（性能优化）
-
-- Django 的 `User` 对象会缓存权限（`_perm_cache`）以减少 DB 查询。**当权限变更（给用户/组分配权限）时需要清理该缓存**。
-- 推荐使用 signals 清理缓存：
-
-```py
-from django.db.models.signals import m2m_changed
-from django.dispatch import receiver
-from django.contrib.auth.models import Group, User
-
-@receiver(m2m_changed, sender=Group.permissions.through)
-def clear_perm_cache_on_group_perm_change(sender, instance, action, **kwargs):
-    if action in ('post_add','post_remove','post_clear'):
-        for user in instance.user_set.all():
-            if hasattr(user, '_perm_cache'):
-                del user._perm_cache
-
-@receiver(m2m_changed, sender=User.user_permissions.through)
-def clear_perm_cache_on_user_perm_change(sender, instance, action, **kwargs):
-    if action in ('post_add','post_remove','post_clear') and hasattr(instance, '_perm_cache'):
-        del instance._perm_cache
-
-@receiver(m2m_changed, sender=User.groups.through)
-def clear_perm_cache_on_group_membership_change(sender, instance, action, **kwargs):
-    if action in ('post_add','post_remove','post_clear') and hasattr(instance, '_perm_cache'):
-        del instance._perm_cache
-```
-
-- 若在分布式环境中把权限集缓存到 Redis，还需要在权限变更时触发分布式失效（例如通过 Pub/Sub 或消息队列）。
-
-------
-
-# 9 审计 / 日志（必做）
-
-- 记录关键操作（user, action, resource, object_id, succeeded/denied, timestamp, IP）。
-- 可以实现中间件或在自定义权限类/装饰器内记录被拒绝的尝试，示例（简化）：
-
-```py
-import logging
-logger = logging.getLogger('permissions')
-
-def log_permission_attempt(user, action, obj, allowed):
-    logger.info("perm attempt user=%s action=%s obj=%s allowed=%s", user.pk if user else None, action, getattr(obj,'pk', None), allowed)
-```
-
-将其置入权限判断逻辑中，便于事后审计与入侵检测。
-
-------
-
-# 10 单元/集成测试（示例）
-
-```py
-from django.test import TestCase
-from django.contrib.auth.models import User, Group, Permission
-from django.urls import reverse
-from .models import Article
-
-class PermissionTests(TestCase):
-    def setUp(self):
-        self.editor = User.objects.create_user('editor', 'e@example.com', 'pwd')
-        editors = Group.objects.create(name='Editors')
-        perm = Permission.objects.get(codename='change_article')
-        editors.permissions.add(perm)
-        self.editor.groups.add(editors)
-        self.article = Article.objects.create(title='Hi', content='X', owner=self.editor)
-
-    def test_editor_can_change_own_article(self):
-        self.client.login(username='editor', password='pwd')
-        resp = self.client.post(reverse('article_edit', args=[self.article.id]), {'title':'New'})
-        self.assertNotEqual(resp.status_code, 403)
-```
-
-- CI 中必须包含权限测试用例，尤其是敏感路径（删除、导出、财务相关）。
-
-------
-
-# 11 管理后台与运维建议
-
-- 使用 **Django Admin** 做初期权限/组管理（自动支持 Permission 与 Group）。
-- 生产环境：建立一个「权限管理手册」列出所有 resource:action 映射，便于审计与合规。
-- 将能赋予高权限的账号数量降到最少（最小特权原则）。
-- 当用 JWT 传输权限（例如把 roles/perm 放入 token payload）时要注意：**权限变更无法立即生效** —— 使用短有效期的 access token + refresh token，或实现 token 黑名单。
-
-------
-
-# 12 常见陷阱与最佳实践（总结）
-
-- **不要只靠前端做权限控制**（必须在后端验证）。
-- **把权限按逻辑分组到 Group（角色）**，避免把权限直接分配给大量用户。
-- 对象级权限复杂时优先考虑 `guardian` 或统一策略引擎（如 Casbin/OPA）。
-- 修改权限后要清理缓存（`_perm_cache` 或自定义缓存）。
-- 写好审计日志与自动化测试（CI 必跑）。
-- 若数据非常敏感，考虑数据库行级安全（如 PostgreSQL RLS）配合应用层校验作为双保险。
-
-------
-
-# 13 推荐的文件结构（示例）
-
-```
-yourproject/
-  yourapp/
-    models.py          # Article, Meta.permissions
-    admin.py           # ArticleAdmin 限制非 superuser 只见自己等
-    views.py           # CBV/FV + permission checks
-    permissions.py     # DRF 自定义权限类
-    signals.py         # 清理用户权限缓存的 signal handlers
-    management/commands/create_roles.py
-    tests.py
-  settings.py
-  requirements.txt
+    text = (requirement.statement or "").lower()
+    have_rp = bool(doc_fields.get("responsible_parties"))
+    have_date = bool(doc_fields.get("dates"))
+    # 极简示意
+    if "责任人" in requirement.statement and not have_rp:
+        return {"decision":"fail", "reason":"未抽取到责任人信息", "confidence":0.9}
+    if "日期" in requirement.statement and not have_date:
+        return {"decision":"fail", "reason":"未抽取到签署/生效日期", "confidence":0.85}
+    # 若无法仅靠规则断言合格
+    if "责任人" in requirement.statement and have_rp:
+        return {"decision":"pass", "reason":"已检测到责任人字段", "confidence":0.75}
+    return None  # 交给LLM裁决
 ```
 
 ------
 
-如果你愿意，我可以：
+## 3) 不符合项报告工具：`NCReportTool`
 
-- 把上面的示例 **生成成一个最小可运行的 Django 示例仓库**（含 `settings.py`、`models.py`、`views.py`、`urls.py`、管理命令与测试用例），或者
-- 直接给出 **完整的 DRF + JWT + django-guardian** 的实现代码（可拷贝运行）。
+- 输入：`ComplianceSummary`（上一步的结果）。
+- 输出：
+  - `report_json`：可直接写库（含不符合项列表、风险等级、整改建议占位）；
+  - `report_md`：Markdown 摘要（用于下载或预览）；
+  - 可扩展导出 PDF（在后端转化）。
+
+```python
+# tools/nc_report_tool.py
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from typing import Dict
+from schemas import ComplianceSummary
+
+class NCReportInput(BaseModel):
+    summary: Dict = Field(..., description="ComplianceSummary 字典")
+
+class NCReportTool(BaseTool):
+    name = "nc_report_generator"
+    description = "将合规判定结果转为不符合项报告（JSON + Markdown 摘要）。"
+    args_schema = NCReportInput
+
+    def _run(self, summary: Dict) -> Dict:
+        cs = ComplianceSummary(**summary)
+        nonconfs = [it for it in cs.items if it.decision == "fail"]
+        title = f"不符合项报告 - {cs.doc_id}"
+        md_lines = [f"# {title}",
+                    f"- 检查时间：{cs.checked_at}",
+                    f"- 总体结论：**{cs.overall.upper()}**",
+                    f"- 统计：{cs.stats}",
+                    "",
+                    "## 不符合项清单"]
+        for i, it in enumerate(nonconfs, start=1):
+            md_lines += [
+              f"### {i}. {it.requirement.title} ({it.requirement.severity})",
+              f"- 条文：{it.requirement.statement}",
+              f"- 结论：**FAIL**",
+              f"- 原因：{it.reason}",
+              f"- 证据：",
+            ]
+            for ev in it.matched_evidence[:2]:
+                md_lines.append(f"  - {ev.source_id} · {ev.chunk_id} · p{ev.page} · “{(ev.text_snippet or '')[:120]}…”")
+            md_lines.append("")
+        # 若全通过，也给出通过说明
+        if not nonconfs:
+            md_lines.append("> 本次检查未发现不符合项。")
+        report_md = "\n".join(md_lines)
+
+        return {
+            "report_title": title,
+            "report_json": {
+                "doc_id": cs.doc_id,
+                "overall": cs.overall,
+                "stats": cs.stats,
+                "nonconformities": [it.dict() for it in nonconfs]
+            },
+            "report_md": report_md
+        }
+
+    async def _arun(self, **kwargs):
+        return self._run(**kwargs)
+```
+
+------
+
+## 在 Agent 中挂载与调用
+
+```python
+# agent_init.py
+from langchain.chat_models import ChatOpenAI
+from langchain.agents import initialize_agent, AgentType
+from tools.regdoc_search_tool import RegDocSearchTool
+from tools.compliance_check_tool import ComplianceCheckTool
+from tools.nc_report_tool import NCReportTool
+
+def build_agent():
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    tools = [RegDocSearchTool(), ComplianceCheckTool(), NCReportTool()]
+    return initialize_agent(
+        tools=tools, llm=llm,
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True
+    )
+```
+
+------
+
+## Django REST API（简化示例）
+
+```python
+# views.py
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from tools.compliance_check_tool import ComplianceCheckTool
+from tools.nc_report_tool import NCReportTool
+
+check_tool = ComplianceCheckTool()
+report_tool = NCReportTool()
+
+@api_view(["POST"])
+def compliance_check(request):
+    payload = request.data
+    result = check_tool._run(
+        doc_id=payload.get("doc_id"),
+        text=payload.get("text"),
+        themes=payload.get("themes", []),
+        top_k=payload.get("top_k", 8)
+    )
+    return Response(result)
+
+@api_view(["POST"])
+def nc_report(request):
+    summary = request.data  # 应为 ComplianceSummary 字典
+    result = report_tool._run(summary=summary)
+    return Response(result)
+```
+
+------
+
+## 生产落地建议（关键点）
+
+- **模板化 Requirement**：把常用法规条款沉淀为“机器可读模板”（req_id/statement/检查规则指针），LLM 只做“语义补全/边界判断”。
+- **强溯源**：所有“pass/fail”必须附证据 chunk（doc_id, chunk_id, page, snippet）；前端可做高亮定位。
+- **可审计**：记录模型版本、提示词版本、Faiss 索引版本。
+- **批处理/异步**：大文件 & 多文档用 Celery；结果可轮询或回调。
+- **阈值策略**：对 `uncertain` 设提醒/复核队列；对 `fail` 根据 `severity` 触发通知（邮件/IM Webhook）。
+
+------
+
+如果你把你目前“法规条款模板/类别列表”发我，我可以把 `run_rule_checks_for_requirement` 里的一堆检查函数写细（比如签署日期必填、信息安全等保等级、数据留存期限、责任人角色映射、KPI阈值等），并给你配好**few-shot**判定提示词。
 
 
 
-
-
-
+> 其实**上传文件**本身并不一定需要 Agent，它完全可以是一个普通的 API 流程（`POST /api/files/upload/` → 存储 → 解析 → 入库）。
+>
+> 之所以在**大模型工具箱平台**里会考虑用到 **Agent 模式**，主要是为了 **自动化调用多个工具**。场景区别可以这样理解：
+>
+> ------
+>
+> ### 1. 普通上传 API（不需要 Agent）
+>
+> - 用户上传 PDF/Docx → 系统解析切分 → 向量化写入 FAISS。
+> - 全流程是 **确定的**，不需要 LLM 来“决定”下一步干什么。
+>    👉 这种情况直接写 Django API 就好。
+>
+> ------
+>
+> ### 2. Agent 模式适合的情况
+>
+> 当需求是 **模糊的/复合的/用户用自然语言提问**时，Agent 才有价值：
+>
+> - 例如用户输入一句话：
+>
+>   > “帮我检查这份合同是否符合公司采购标准，如果需要，还帮我在网上查一下相关法规。”
+>
+> - Agent 就会：
+>
+>   1. 先调用 **FileIngestTool**（上传文件解析+入库）；
+>   2. 再调用 **ComplianceCheckTool**（跑合规检查）；
+>   3. 如果合规性规则不够，还会触发 **BaiduSearchTool** 去检索外部法规；
+>   4. 最后组合结果生成一份报告。
+>
+> 👉 这里 **Agent 的价值** = 自动选择和编排工具，而不是单纯接文件。
+>
+> ------
+>
+> ### 3. 如何结合
+>
+> 你可以这样设计：
+>
+> - **上传 API**：普通 REST API，走固定流程，效率高。
+> - **Agent API**：当用户用自然语言发起任务时，Agent 才会串联调用 “上传→检索→合规→搜索→报告”。
+>
+> 
 
 
 
