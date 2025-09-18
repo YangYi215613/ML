@@ -206,6 +206,9 @@ services:
     volumes:
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports: ["80:80"]
+```
+
+```dockerfile
 # svc/Dockerfile
 FROM nvcr.io/nvidia/pytorch:24.02-py3
 WORKDIR /app
@@ -213,7 +216,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
 EXPOSE 8000
-CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8000"]
+CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8000"
 ```
 
 ------
