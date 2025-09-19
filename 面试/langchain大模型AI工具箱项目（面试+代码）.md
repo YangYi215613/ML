@@ -1031,3 +1031,350 @@ def protected_route(current_user: str = Depends(get_current_user)):
 ---
 
 如需完整示例或集成到你的项目结构，可继续提问！
+
+
+
+# 文件增量处理
+
+在实际项目中，**文件增量处理**（即只处理有变动的文件）通常采用如下方式：
+
+---
+
+### 1. **文件哈希值比对**
+- 上传或扫描文件时，计算文件的哈希值（如 SHA256）。
+- 数据库中保存每个文件的哈希值（如 `content_hash` 字段）。
+- 新文件或修改后的文件，其哈希值会发生变化。
+- **流程：**
+  1. 计算当前文件哈希。
+  2. 查数据库：如果哈希值不同，说明文件有变动，执行更新（如重新入库、重新向量化）。
+  3. 如果哈希值相同，则跳过，无需处理。
+
+---
+
+### 2. **更新时间戳比对**
+- 数据库保存文件的 `updated_at` 字段。
+- 定期扫描文件系统，比较文件的最后修改时间和数据库记录。
+- 如果文件的修改时间晚于数据库记录，则说明有变动，需要处理。
+
+---
+
+### 3. **增量处理的代码示例**
+
+假设你的 `Document` 表有 `content_hash` 字段：
+
+````python
+def upsert_file(session: Session, path: Path, original_name: str, mime: str) -> Document:
+    content_hash = sha256_of_file(path)
+    # 查找是否已有该文件的记录
+    doc = session.exec(select(Document).where(Document.filename == path.name)).first()
+    if doc:
+        if doc.content_hash == content_hash:
+            # 文件未变，无需处理
+            return doc
+        # 文件有变动，更新内容
+        doc.content_hash = content_hash
+        doc.updated_at = datetime.utcnow()
+        # ...重新处理内容、向量化等...
+    else:
+        # 新文件，插入记录
+        doc = Document(
+            filename=path.name,
+            original_name=original_name,
+            content_hash=content_hash,
+            mime_type=mime,
+            size=path.stat().st_size,
+        )
+        session.add(doc)
+    session.commit()
+    return doc
+````
+
+---
+
+### 4. **实际项目建议**
+
+- **务必保存文件哈希值**，这是判断文件内容是否变化的最可靠方式。
+- 对于大文件或高频变动场景，也可结合分块哈希、增量同步等高级策略。
+- 结合 `updated_at` 字段，可以方便地做定时扫描和同步。
+
+---
+
+**总结：**  
+- 计算并保存文件哈希值，作为增量处理的依据。
+- 文件变动时（哈希变化），才重新处理和入库，避免重复计算和存储浪费。
+
+# 推荐的Tools
+
+除了你项目中已有的 `tools`（如 RAG、百度搜索等），你可以考虑添加以下常用且实用的功能模块，并推荐相应的 Python 工具包：
+
+---
+
+### 1. **OCR 文档识别工具**
+- **功能**：支持图片、PDF 扫描件的文字提取，丰富知识库内容。
+- **推荐工具**：[`pytesseract`](https://github.com/madmaze/pytesseract)（基于 Tesseract），[`easyocr`](https://github.com/JaidedAI/EasyOCR)
+
+---
+
+### 2. **PDF/Office 文档解析工具**
+- **功能**：支持 PDF、Word、Excel 等格式的内容提取和结构化。
+- **推荐工具**：[`pdfplumber`](https://github.com/jsvine/pdfplumber)、[`python-docx`](https://python-docx.readthedocs.io/)、[`openpyxl`](https://openpyxl.readthedocs.io/)
+
+---
+
+### 3. **网页内容采集工具**
+- **功能**：自动采集网页正文、去除广告、提取结构化信息。
+- **推荐工具**：[`newspaper3k`](https://github.com/codelucas/newspaper)、[`readability-lxml`](https://github.com/buriy/python-readability)
+
+---
+
+### 4. **智能摘要/关键词提取工具**
+- **功能**：对长文本自动生成摘要或提取关键词，便于检索和展示。
+- **推荐工具**：[`textrank4zh`](https://github.com/letiantian/TextRank4ZH)、[`sumy`](https://github.com/miso-belica/sumy)
+
+---
+
+### 5. **多语言翻译工具**
+- **功能**：支持上传多语言文档，自动翻译为指定语言。
+- **推荐工具**：[`googletrans`](https://github.com/ssut/py-googletrans)、[`deep-translator`](https://github.com/nidhaloff/deep-translator)
+
+---
+
+### 6. **音频转文字（ASR）工具**
+- **功能**：支持音频文件转写为文本，丰富知识库内容。
+- **推荐工具**：[`openai-whisper`](https://github.com/openai/whisper)、[`SpeechRecognition`](https://github.com/Uberi/speech_recognition)
+
+---
+
+### 7. **图片/表格内容结构化工具**
+- **功能**：识别图片中的表格、公式等结构化内容。
+- **推荐工具**：[`camelot`](https://github.com/camelot-dev/camelot)（PDF 表格）、[`paddleocr`](https://github.com/PaddlePaddle/PaddleOCR)
+
+---
+
+### 8. **知识图谱/实体关系抽取工具**
+- **功能**：从文本中抽取实体及其关系，构建知识图谱。
+- **推荐工具**：[`spacy`](https://spacy.io/)、[`HanLP`](https://github.com/hankcs/HanLP)
+
+---
+
+### 9. **敏感信息检测与脱敏工具**
+- **功能**：自动检测并脱敏身份证号、手机号、邮箱等敏感信息。
+- **推荐工具**：[`presidio`](https://github.com/microsoft/presidio)
+
+---
+
+### 10. **日志与监控工具**
+- **功能**：记录用户操作、系统异常，便于审计和维护。
+- **推荐工具**：[`loguru`](https://github.com/Delgan/loguru)、[`sentry-sdk`](https://github.com/getsentry/sentry-python)
+
+---
+
+如需某一类工具的具体用法或集成建议，可以继续提问！
+
+# Agent中工具的使用方式
+
+在你的项目中，**工具（tools）通常是由 agent 自动选择和调用的**。  
+Agent 会根据用户的提问内容、上下文和工具描述，自动判断该调用哪个工具（如 RAG 检索、百度搜索、报告生成等），并将结果整合后返回给用户。
+
+这种机制常见于基于 LangChain、OpenAI Function Calling、AutoGen 等框架的智能体系统，极大提升了系统的灵活性和自动化能力。  
+你只需注册好工具，agent 就能根据实际需求自动选择和组合使用。
+
+
+
+# 音频转换工具
+
+````python
+from typing import Optional
+import whisper  # 需先 pip install openai-whisper
+from pathlib import Path
+
+class AudioTranscriber:
+    """
+    音频转文字工具，基于 OpenAI Whisper。
+    支持常见音频格式（mp3, wav, m4a 等）。
+    """
+    def __init__(self, model_name: str = "base"):
+        # 可选模型：tiny, base, small, medium, large
+        self.model = whisper.load_model(model_name)
+
+    def transcribe(self, audio_path: str | Path, language: Optional[str] = None) -> str:
+        """
+        将音频文件转为文本。
+        :param audio_path: 音频文件路径
+        :param language: 可选，指定语言（如 "zh"、"en"），不指定则自动检测
+        :return: 转写后的文本
+        """
+        result = self.model.transcribe(str(audio_path), language=language)
+        return result["text"]
+````
+
+**用法示例：**
+```python
+# from app.tools.audio_transcriber import AudioTranscriber
+# transcriber = AudioTranscriber(model_name="base")
+# text = transcriber.transcribe("test_audio.mp3")
+# print(text)
+```
+
+> 依赖：`pip install openai-whisper`  
+> 支持多种音频格式，模型越大识别越准但越慢。
+
+
+
+# tool中，可以封装模型应用，比如在对话框中输入了问题，然后旁边上传了音频 或者 图片，agent可以自动调用 处理 音频 或 图片的工具，最后将处理结果返回LLM的prompt中？
+
+在现代智能体（Agent）系统中，**tool 不仅可以封装外部API，也可以封装本地模型应用**（如音频转写、图片识别、OCR、表格解析等）。  
+当用户在对话框输入问题并上传音频或图片时，Agent 会根据输入内容和上下文，自动选择并调用相应的工具（tool），将音频转成文本、图片转成描述或结构化数据，然后**把这些处理结果作为上下文拼接到 LLM 的 prompt 中**，最终由大模型生成综合回答。
+
+这种设计让 LLM 能“看见”多模态内容，自动完成复杂任务，极大提升了系统的智能化和自动化能力。
+
+**总结：**
+- tool 可以是模型应用（如 Whisper、OCR、图片识别等）。
+- Agent 自动选择并调用这些工具。
+- 工具的输出作为 prompt 的一部分，最终由 LLM 生成回答。
+- 用户体验就是“上传什么，问什么，自动得到答案”。
+
+# Agent是如何选择工具的？
+
+Agent 选择工具（tool）的过程，通常是**基于用户输入内容和工具描述自动决策**，主要有以下几种机制：
+
+---
+
+### 1. **工具注册与描述**
+- 每个 tool（如音频转写、图片识别、RAG 检索等）都要注册到 agent，并有清晰的描述（如功能、输入输出类型）。
+- 这些描述会作为 prompt 的一部分，告诉大模型“我有哪些工具、每个工具能干什么”。
+
+---
+
+### 2. **大模型推理选择**
+- 用户输入问题（如“请识别我上传的图片内容”），agent 会把用户输入、可用工具描述、上下文等拼成 prompt，一起发给 LLM。
+- LLM 根据 prompt 内容，**推理出应该调用哪个工具**，并生成调用参数。
+- agent 框架（如 LangChain Agent、OpenAI Function Calling、AutoGen 等）会解析 LLM 的输出，自动调用对应的工具函数。
+
+---
+
+### 3. **多轮调用与组合**
+- 如果任务复杂，agent 还可以多轮调用不同工具，把中间结果继续传给 LLM，直到得到最终答案。
+
+---
+
+### 4. **举例说明**
+假如你注册了如下工具：
+- `transcribe_audio`（音频转文本）
+- `ocr_image`（图片转文本）
+- `rag_search`（知识库检索）
+
+用户输入：“请分析我上传的音频内容”，并上传了音频文件。  
+Agent 会自动选择 `transcribe_audio` 工具，先把音频转成文本，再把文本作为 prompt 继续问 LLM。
+
+---
+
+### 5. **代码层面（以 LangChain 为例）**
+
+```python
+from langchain.agents import initialize_agent, Tool
+
+tools = [
+    Tool(name="transcribe_audio", func=transcribe_audio, description="音频转文本"),
+    Tool(name="ocr_image", func=ocr_image, description="图片转文本"),
+    Tool(name="rag_search", func=rag_search, description="知识库检索"),
+]
+
+agent = initialize_agent(tools, llm, agent_type="openai-functions")
+# agent.run("请分析我上传的音频内容", files=[...])
+```
+LLM 会根据描述和输入，自动决定调用哪个工具。
+
+---
+
+**总结：**  
+Agent 选择工具是**自动的**，依赖于工具的描述、用户输入和大模型的推理能力。你只需注册好工具，agent 就能根据实际需求自动选择和调用。
+
+# 如何提高web性能？
+
+
+
+你的项目目前是典型的**同步 FastAPI + SQLModel + 本地模型/工具**结构，这种结构在并发量大时确实容易成为瓶颈。  
+要提升吞吐量（即单位时间内能处理的请求数），可以从以下几个方面优化：
+
+---
+
+## 1. **异步化处理**
+
+- **数据库操作**：用 `async` 版本的数据库驱动（如 `databases`、`SQLModel` 的异步支持、`SQLAlchemy` 的 async）。
+- **文件/IO 操作**：用异步文件读写（如 `aiofiles`）。
+- **FastAPI 路由**：尽量用 `async def`，让请求处理不阻塞主线程。
+
+---
+
+## 2. **模型推理与工具调用优化**
+
+- **模型推理异步化**：如用 `asyncio.to_thread` 或专门的推理服务（如用 `ray serve`、`torchserve`、`triton` 部署模型）。
+- **工具调用并发**：如多个文件/任务可用 `asyncio.gather` 并发处理。
+
+---
+
+## 3. **多进程/多实例部署**
+
+- 用 `gunicorn` + `uvicorn.workers.UvicornWorker` 启动多个进程（推荐生产环境）：
+  ```shell
+  gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app
+  ```
+- 或用 Docker/K8s 水平扩展多个实例。
+
+---
+
+## 4. **缓存与批处理**
+
+- **缓存热点数据**：如 Redis 缓存常用查询、embedding 结果等。
+- **批量处理**：如批量入库、批量向量化，减少数据库和模型调用次数。
+
+---
+
+## 5. **前后端解耦与任务队列**
+
+- **耗时任务异步化**：如音频转写、PDF解析等，建议用 Celery、RQ、FastAPI BackgroundTasks 等任务队列异步处理，前端轮询或回调获取结果。
+- **前端上传后立即返回任务ID，后台慢慢处理**。
+
+---
+
+## 6. **数据库优化**
+
+- 合理建索引，避免全表扫描。
+- 读写分离、大表分区等。
+
+---
+
+## 7. **静态资源与大文件分离**
+
+- 文件上传/下载用专门的静态服务器（如 Nginx、OSS、S3），减少 API 压力。
+
+---
+
+## 8. **监控与限流**
+
+- 加入 Prometheus、Grafana 监控接口耗时、QPS、错误率。
+- 用限流中间件防止恶意刷接口。
+
+---
+
+### **举例：异步 FastAPI 路由**
+
+````python
+from fastapi import APIRouter
+import aiofiles
+
+@router.post("/upload")
+async def upload_file(file: UploadFile):
+    async with aiofiles.open(f"./uploads/{file.filename}", "wb") as out_file:
+        content = await file.read()
+        await out_file.write(content)
+    return {"msg": "ok"}
+````
+
+---
+
+**总结：**  
+- 用异步、并发、任务队列、缓存、分布式等手段提升吞吐量。
+- 生产环境用多进程/多实例部署。
+- 大模型推理建议独立服务化，API 只做调度和业务逻辑。
