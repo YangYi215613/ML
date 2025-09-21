@@ -36,8 +36,6 @@
 
 
 
-
-
 下面是截至 Hugging Face `transformers` 最新版本里（四大后端：PyTorch、TensorFlow、Flax）常见的 **AutoModelFor\*** 系列类 + 所支持任务的完整/较完整列表 + 简要说明。这个列表可能随版本增加／改动（特别是多模态／视音频任务），但可以作为参考。
 
 ------
