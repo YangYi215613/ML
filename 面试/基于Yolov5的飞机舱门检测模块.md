@@ -256,3 +256,4 @@ ws.onmessage = (e)=>{ const d=JSON.parse(e.data); /* d.img 为 base64 */ }
   - 多类别（`door`/`door_closed`）简易直接；
   - 单类 + 属性分类头更灵活，但需改 Head 与标签。
 - **多路摄像头扩展？**：每路独立解码协程 + 共享推理池；根据 GPU 利用率动态分配。
+
